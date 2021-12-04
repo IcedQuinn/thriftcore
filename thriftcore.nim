@@ -24,7 +24,7 @@ type
 
 proc to_byte*(cet: CompactElementType): byte =
    case cet:
-   of cetBoolTrue: return 2
+   of cetBoolTrue: return 1
    of cetBoolFalse: return 2
    of cetI8: return 3
    of cetI16: return 4
