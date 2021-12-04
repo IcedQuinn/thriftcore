@@ -342,11 +342,25 @@ proc write_binary*(source: var string; payload: string; ok: var bool) =
    source.add payload
    ok = true
 
+# NB compact protocol uses little endian because someone goofed back in the day
+
 proc read_double*(source: string; here: var int; ok: var bool): float64 =
-   raise new_exception(Exception, "TODO not implemented")
+   let valid = 0..source.high
+   ok = false
+   if here notin valid: return
+   if here+7 notin valid: return
+
+   var buffer: array[8, byte]
+   for i in 0..7:
+      buffer[i] = source[here].byte
+      inc here
+
+   result = cast[float64](buffer)
 
 proc write_double*(source: var string; payload: float64; ok: var bool) =
-   raise new_exception(Exception, "TODO not implemented")
+   var buffer = cast[array[8, byte]](payload)
+   for i in 0..7: cast[char](source.add buffer[i])
+   ok = true
 
 proc write_listset_bool*(source: var string; payload: bool; ok: var bool) =
    if payload:
