@@ -22,6 +22,26 @@ type
       cmtException ## An error across the wire.
       cmtOneway    ## Call going out that does not anticipate a reply.
 
+   CompactEvent* = object
+      case kind: CompactElementType
+      of cetUnknown, cetBoolTrue, cetBoolFalse:
+         discard
+      of cetI8, cetI16, cetI32, cetI64:
+         ivalue*: int64
+      of cetDouble:
+         dvalue*: float64
+      of cetBinary:
+         length*: int64
+      of cetStruct:
+         field*: int16
+         inner_struct_type*: CompactElementType
+      of cetList, cetSet:
+         list_length*: int32
+         inner_list_type*: CompactElementType
+      of cetMap:
+         map_elements*: int32
+         key_type*, value_type*: CompactElementType
+
 proc to_byte*(cet: CompactElementType): byte =
    case cet:
    of cetBoolTrue: return 1
