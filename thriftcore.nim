@@ -327,6 +327,85 @@ proc read_message_header*(source: string; here: var int; ok: var bool): CompactM
 
    ok = true
 
+proc write_varint*(source: var string; value: int64; ok: var bool) =
+   ## Encodes and writes a variable length integer.
+   for k in b128bytes(value): source.add cast[char](k)
+   ok = true
+
+proc write_zigvarint*(source: var string; value: int64; ok: var bool) =
+   ## Zigzags, encodes, and writes a variable length integer.
+   for k in b128bytes(zigzag64(value)): source.add cast[char](k)
+   ok = true
+
+proc write_binary*(source: var string; payload: string; ok: var bool) =
+   write_varint(source, payload.len.int64, ok)
+   source.add payload
+   ok = true
+
+proc read_double*(source: string; here: var int; ok: var bool): float64 =
+   raise new_exception(Exception, "TODO not implemented")
+
+proc write_double*(source: var string; payload: float64; ok: var bool) =
+   raise new_exception(Exception, "TODO not implemented")
+
+proc write_listset_bool*(source: var string; payload: bool; ok: var bool) =
+   if payload:
+      source.add cast[char](1)
+   else:
+      source.add cast[char](0)
+   ok = true
+
+proc write_close_byte*(source: var string; ok: var bool) =
+   ## Writes a nil byte. Needed to write empty maps, or close structures.
+   source.add 0.char
+   ok = true
+
+proc write_struct_header*(source: var string; field_type: CompactElementType; field_id: int16; last_id: var int16; ok: var bool) =
+   ## Writes the header for a struct entry.
+   ## last_field is used to support differential encoding of field IDs.
+
+   let gap = last_id.int - field_id.int
+
+   if field_fits_nibble(gap):
+      source.add cast[char]((gap.byte shl 4) + to_byte(field_type))
+   else:
+      let size = cast[array[2, byte]](field_id)
+      source.add cast[char](to_byte(field_type))
+      source.add cast[char](size[0])
+      source.add cast[char](size[1])
+
+   last_id = field_id
+   ok = true
+
+proc write_listset_header*(source: var string; value_type: CompactElementType; count: int; ok: var bool) =
+   if count < 0:
+      ok = false
+      return
+
+   if count < 15:
+      source.add cast[char]((count.byte shr 4) + to_byte(value_type))
+      write_varint(source, count, ok)
+      if not ok: return
+   else:
+      source.add cast[char](0xF0 + to_byte(value_type))
+
+   ok = true
+
+proc write_map_header*(source: var string; key_type, value_type: CompactElementType; count: int; ok: var bool) =
+   if count < 0:
+      ok = false
+      return
+
+   if count == 0:
+      source.add 0.char
+   else:
+      write_varint(source, count, ok)
+      if not ok: return
+
+   source.add cast[char]((to_byte(key_type) shl 4) + to_byte(value_type))
+
+   ok = true
+
 when is_main_module:
    block:
       let a = b128enc(1)
