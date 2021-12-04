@@ -22,6 +22,12 @@ type
       cmtException ## An error across the wire.
       cmtOneway    ## Call going out that does not anticipate a reply.
 
+   CompactMessageHeader* = object
+      protocol_id*, version*: int
+      message_type*: CompactMessageType
+      sequence_id*: int32
+      name*: string
+
    CompactEvent* = object
       case kind: CompactElementType
       of cetUnknown, cetBoolTrue, cetBoolFalse:
@@ -81,8 +87,9 @@ proc to_byte*(cmt: CompactMessageType): byte =
    of cmtReply: return 2
    of cmtException: return 3
    of cmtOneway: return 4
+   of cmtUnknown: return 0 # XXX maybe throw a defect?
 
-proc to_cmt*(cmt: CompactMessageType): byte =
+proc to_cmt*(cmt: int): CompactMessageType =
    case cmt
    of 1: return cmtCall
    of 2: return cmtReply
@@ -91,4 +98,257 @@ proc to_cmt*(cmt: CompactMessageType): byte =
    else:
       # XXX maybe throw a defect?
       return cmtUnknown
+
+# TODO cut and pasted from protobufcore; probably shunt to a separate package
+
+proc b128enc*(value: int64): array[10, byte] =
+   ## Encodes a 64-bit signed integer as up to ten bytes of output.
+
+   # XXX could do with a duff device for portable code
+   # also a good candidate for SIMD
+   result[0] = (value and 0x7F).byte
+   result[1] = ((value shr 7) and 0x7F).byte
+   result[2] = ((value shr 14) and 0x7F).byte
+   result[3] = ((value shr 21) and 0x7F).byte
+   result[4] = ((value shr 28) and 0x7F).byte
+   result[5] = ((value shr 35) and 0x7F).byte
+   result[5] = ((value shr 42) and 0x7F).byte
+   result[6] = ((value shr 49) and 0x7F).byte
+   result[7] = ((value shr 56) and 0x7F).byte
+   result[8] = ((value shr 63) and 0x7F).byte
+
+   # count how many bytes we will write
+   var hits = 0
+   for i in 0..8:
+      if result[i] > 0:
+         hits = i
+
+   # set headers
+   for i in 0..<hits:
+      result[i] += 0x80
+
+iterator b128bytes*(value: int64): byte =
+   ## Iterator which returns each byte of a base 128 encoded integer.
+   let x = b128enc(value)
+   for y in 0..8:
+      if x[y] == 0: break
+      yield x[y]
+
+proc b128dec*(value: array[10, byte]): int64=
+   ## Decodes up to ten bytes of a base 128 encoded integer.
+
+   # make internal copy and kill header flags
+   # a good SIMD candidate
+   var inside: array[10, byte]
+   inside = value
+   for i in 0..8:
+      inside[i] = inside[i] and 0x7F
+
+   # XXX could do with a duff device for portable code
+   # also a good candidate for SIMD
+   result =  inside[0].int64 +
+            (inside[1].int64 shl 7) +
+            (inside[2].int64 shl 14) +
+            (inside[3].int64 shl 21) +
+            (inside[4].int64 shl 28) +
+            (inside[5].int64 shl 35) +
+            (inside[5].int64 shl 42) +
+            (inside[6].int64 shl 49) +
+            (inside[7].int64 shl 56) +
+            (inside[8].int64 shl 63)
+
+proc zigzag32*(value: int32): int32 {.inline.} =
+   ## Performs zigzag encoding on a 32-bit value.
+   {.emit: ["result = (", value, " << 1) ^ (", value, " >> 31);"].}
+
+proc zigzag64*(value: int64): int64 {.inline.} =
+   ## Performs zigzag encoding on a 64-bit value.
+   {.emit: ["result = (", value, " << 1) ^ (", value, " >> 63);"].}
+
+proc unzigzag32*(value: int32): int32 {.inline.} =
+   ## Reverses zigzag encoding on a 32-bit value.
+   {.emit: ["result = (", value, " >> 1) ^ -(", value, " & 1);"].}
+
+proc unzigzag64*(value: int64): int64 {.inline.} =
+   ## Reverses zigzag encoding on a 64-bit value.
+   {.emit: ["result = (", value, " >> 1) ^ -(", value, " & 1);"].}
+
+proc read_varint*(source: string; here: var int; ok: var bool): int64 =
+   ## Reads a variable length integer from a string by moving a cursor.
+   let valid = 0..source.high
+
+   ok = false
+   if here notin valid: return
+
+   var bundle: array[10, byte]
+   for i in 0..9:
+      if (here notin valid) or ((source[here].int and 0x80) == 0): break
+      bundle[i] = source[here].byte
+      inc here
+
+   result = b128dec(bundle)
+   ok = true
+
+proc read_zigvarint*(source: string; here: var int; ok: var bool): int64 =
+   ## Reads a zigzag encoded variable length integer from a string by moving a cursor.
+   result = unzigzag64(read_varint(source, here, ok))
+
+proc field_fits_nibble*(value: int): bool =
+   return value >= 0 and value < 0x0F
+
+proc read_struct_field_header*(source: string; last_field: var int16; here: var int; ok: var bool): CompactEvent =
+   ## last_field is used to resolve field offset deltas.
+   ok = false
+   let mark = here
+   let loof = last_field
+   let valid = 0..source.high
+   result = CompactEvent(kind: cetStruct)
+   defer:
+      if not ok:
+         here = mark
+         last_field = loof
+
+   if here notin valid: return
+   let h = source[here].uint8
+   inc here
+   if here notin valid: return
+
+   let hlo = h and 0x0F
+   let hhi = (h and 0xF0) shr 4
+
+   result.inner_list_type = to_cet(hlo)
+
+   if hhi > 0:
+      # this is a delta
+      inc last_field, hhi.int
+   else:
+      last_field = read_zigvarint(source, here, ok).int16
+      if not ok: return
+
+   result.field = last_field
+   ok = true
+
+proc read_list_header*(source: string; here: var int; ok: var bool): CompactEvent =
+   ## Reads a list heading.
+   let mark = here
+   let valid = 0..source.high
+   ok = false
+   if here notin valid: return
+   defer:
+      if not ok:
+         here = mark
+
+   let h = source[here].uint8
+   inc here
+   if here notin valid: return
+
+   let hlo = h and 0x0F
+   let hhi = (h and 0xF0) shr 4
+
+   result = CompactEvent(kind: cetList)
+   result.inner_list_type = to_cet(hlo)
+   # NB bool lists are typed as cetBoolFalse in this header
+   # their values are single bytes 0 or 1
+
+   if hhi < 0x0F:
+      result.list_length = hhi.int32
+   else:
+      result.list_length = read_zigvarint(source, here, ok).int16
+      if not ok: return
+
+   ok = true
+
+proc read_set_header*(source: string; here: var int; ok: var bool): CompactEvent =
+   ## Reads a list heading and if successful, marks it as a set instead.
+   result = read_list_header(source, here, ok)
+   if ok:
+      result.kind = cetSet
+
+proc read_map_header*(source: string; here: var int; ok: var bool): CompactEvent =
+   ## Reads a map header.
+   let valid = 0..source.high
+   let mark = here
+   ok = false
+   if here notin valid: return
+   defer:
+      if not ok:
+         here = mark
+
+   result = CompactEvent(kind: cetMap)
+
+   result.map_elements = read_zigvarint(source, here, ok).int32
+   if not ok: return
+   if here notin valid: return
+
+   let h = source[here].uint8
+   inc here
+
+   let hlo = h and 0x0F
+   let hhi = (h and 0xF0) shr 4
+
+   result.key_type = to_cet(hhi)
+   result.value_type = to_cet(hlo)
+
+   ok = true
+
+proc read_message_header*(source: string; here: var int; ok: var bool): CompactMessageHeader =
+   let valid = 0..source.high
+   let mark = here
+   ok = false
+   if here notin valid: return
+   defer:
+      if not ok:
+         here = mark
+
+   result.protocol_id = source[here].int
+   inc here
+   if here notin valid: return
+
+   let h = source[here].uint8
+   inc here
+   if here notin valid: return
+
+   let hlo = h and 0x37
+   let hhi = (h and 0xE0) shr 5
+
+   result.message_type = to_cmt(hhi.int)
+   result.version = hlo.int
+
+   result.sequence_id = read_zigvarint(source, here, ok).int32
+   if here notin valid: return
+
+   let namelen = read_zigvarint(source, here, ok)
+   if here notin valid: return
+
+   let needle = here + namelen
+   if needle notin valid: return
+   result.name = source.substr(here.int, needle.int)
+   inc here, namelen.int
+
+   ok = true
+
+when is_main_module:
+   block:
+      let a = b128enc(1)
+      assert a[0] == 1
+      assert b128dec(a) == 1
+
+      let b = b128enc(300)
+      assert b[0] == 172
+      assert b[1] == 2
+      assert b128dec(b) == 300
+
+      let c = b128enc(50399)
+      assert c[0] == 0xDF
+      assert c[1] == 0x89
+      assert c[2] == 0x03
+      assert b128dec(c) == 50399
+
+      assert zigzag32( 0) == 0
+      assert zigzag32(-1) == 1
+      assert zigzag32( 1) == 2
+      assert zigzag32(-2) == 3
+
+      assert unzigzag32(zigzag32(1337)) == 1337
+      assert unzigzag32(zigzag32(-1337)) == -1337
 
