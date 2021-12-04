@@ -1,7 +1,9 @@
 
 type
    CompactElementType* = enum
-      cetBool
+      cetUnknown
+      cetBoolTrue
+      cetBoolFalse
       cetI8
       cetI16
       cetI32
@@ -12,11 +14,18 @@ type
       cetSet
       cetMap
       cetStruct
-      cetUnknown
+
+   CompactMessageType* = enum
+      cmtUnknown   ## Error value.
+      cmtCall      ## Call going out on the wire.
+      cmtReply     ## Reply to a previous request.
+      cmtException ## An error across the wire.
+      cmtOneway    ## Call going out that does not anticipate a reply.
 
 proc to_byte*(cet: CompactElementType): byte =
    case cet:
-   of cetBool: return 2
+   of cetBoolTrue: return 2
+   of cetBoolFalse: return 2
    of cetI8: return 3
    of cetI16: return 4
    of cetI32: return 5
@@ -31,7 +40,8 @@ proc to_byte*(cet: CompactElementType): byte =
 
 proc to_cet*(b: byte): CompactElementType =
    case b
-   of 2: return cetBool
+   of 2: return cetBoolTrue
+   of 2: return cetBoolFalse
    of 3: return cetI8
    of 4: return cetI16
    of 5: return cetI32
@@ -44,4 +54,21 @@ proc to_cet*(b: byte): CompactElementType =
    of 12: return cetStruct
    else:
       return cetUnknown
+
+proc to_byte*(cmt: CompactMessageType): byte =
+   case cmt
+   of cmtCall: return 1
+   of cmtReply: return 2
+   of cmtException: return 3
+   of cmtOneway: return 4
+
+proc to_cmt*(cmt: CompactMessageType): byte =
+   case cmt
+   of 1: return cmtCall
+   of 2: return cmtReply
+   of 3: return cmtException
+   of 4: return cmtOneway
+   else:
+      # XXX maybe throw a defect?
+      return cmtUnknown
 
