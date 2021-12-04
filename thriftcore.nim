@@ -40,7 +40,7 @@ proc to_byte*(cet: CompactElementType): byte =
 
 proc to_cet*(b: byte): CompactElementType =
    case b
-   of 2: return cetBoolTrue
+   of 1: return cetBoolTrue
    of 2: return cetBoolFalse
    of 3: return cetI8
    of 4: return cetI16
