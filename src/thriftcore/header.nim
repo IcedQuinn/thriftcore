@@ -79,7 +79,7 @@ proc write_theader*(source: var string; value: THeaderHeader; ok: var bool) =
       source.add kv[1]
 
    let end_headers_pos_a = source.len
-   for i in 0..(end_headers_pos_a mod 4): source.add 0.char
+   for i in 0..((4 - (end_headers_pos_a mod 4)) mod 4): source.add 0.char
    let end_headers_pos_b = source.len
 
    let payload_size = (end_headers_pos_b - start_size_check_pos) + self.length
@@ -89,7 +89,7 @@ proc write_theader*(source: var string; value: THeaderHeader; ok: var bool) =
    source[full_length_pos+2] cast[char](foop[1])
    source[full_length_pos+3] cast[char](foop[0])
 
-   let header_size = end_headers_pos_b - header_remainder_tracking_pos
+   let header_size = (end_headers_pos_b - header_remainder_tracking_pos) / 4
    doop = cast[array[2, byte]](header_size)
    source[header_remainder_pos+0] cast[char](doop[3])
    source[header_remainder_pos+1] cast[char](doop[2])
