@@ -81,9 +81,10 @@ proc read_varint*(source: string; here: var int; ok: var bool): int64 =
 
    var bundle: array[10, byte]
    for i in 0..9:
-      if (here notin valid) or ((source[here].int and 0x80) == 0): break
+      if (here notin valid): break
       bundle[i] = source[here].byte
       inc here
+      if (source[here].int and 0x80) == 0: break
 
    result = b128dec(bundle)
    ok = true
