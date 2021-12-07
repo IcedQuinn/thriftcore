@@ -17,10 +17,11 @@ proc b128enc*(value: int64): array[10, byte] =
    result[8] = ((value shr 63) and 0x7F).byte
 
    # count how many bytes we will write
-   var hits = 0
+   var hits = 8
    for i in 0..8:
-      if result[i] > 0:
-         hits = i
+      dec hits
+      if result[8-i] > 0:
+         break
 
    # set headers
    for i in 0..<hits:
@@ -30,7 +31,7 @@ iterator b128bytes*(value: int64): byte =
    ## Iterator which returns each byte of a base 128 encoded integer.
    let x = b128enc(value)
    for y in 0..8:
-      if x[y] == 0: break
+      if x[y] == 0 and y > 0: break
       yield x[y]
 
 proc b128dec*(value: array[10, byte]): int64=
@@ -83,8 +84,11 @@ proc read_varint*(source: string; here: var int; ok: var bool): int64 =
    for i in 0..9:
       if (here notin valid): break
       bundle[i] = source[here].byte
-      inc here
-      if (source[here].int and 0x80) == 0: break
+      if (source[here].int and 0x80) == 0:
+         inc here
+         break
+      else:
+         inc here
 
    result = b128dec(bundle)
    ok = true
