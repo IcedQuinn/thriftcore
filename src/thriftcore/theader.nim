@@ -16,7 +16,7 @@ type
    THeaderHeader* = object
       length*: uint32 ## Size of the payload being wrapped.
       flags*: uint16
-      sequence_number*: int32
+      sequence_number*: uint32
       protocol_id*: int
       key_values*: seq[(string, string)]
       transforms: seq[int] ## Technically transforms can accept data blocks but no supported transform does. Keep this variable access controlled for future upgrades.
@@ -55,7 +55,7 @@ proc read_theader*(source: string; here: var int; ok: var bool): THeaderHeader =
    for i in 0..3:
       sequencebyte[3-i] = cast[byte](source[here])
       inc here
-   result.sequence_number = cast[int32](sequencebyte)
+   result.sequence_number = cast[uint32](sequencebyte)
 
    var headersizebyte: array[2, byte]
    if here+1 notin valid: return
@@ -119,38 +119,48 @@ proc read_theader*(source: string; here: var int; ok: var bool): THeaderHeader =
 
    ok = true
 
-proc write_theader*(source: var string; value: THeaderHeader; ok: var bool) =
-   ok = false
+proc pad*(source: var string; amount: int) =
+   for i in 0..<amount: source.add 0.char
 
-   # TODO endian nonsense; we assume host is little and we're posting to network byte order
-   let full_length_pos = source.len
-   source.add 0.char
-   source.add 0.char
-   source.add 0.char
-   source.add 0.char
-   let start_size_check_pos = source.len
-
-   # add header magic
-   var doop = cast[array[2, byte]](HeaderMagic)
+proc put_u16be*(source: var string; v: uint16) =
+   var doop = cast[array[2, byte]](v)
    source.add cast[char](doop[1])
    source.add cast[char](doop[0])
 
-   # add flags
-   doop = cast[array[2, byte]](value.flags)
-   source.add cast[char](doop[1])
-   source.add cast[char](doop[0])
-
-   # add sequence number
-   var foop = cast[array[4, byte]](value.sequence_number)
+proc put_u32be*(source: var string; v: uint32) =
+   var foop = cast[array[4, byte]](v)
    source.add cast[char](foop[3])
    source.add cast[char](foop[2])
    source.add cast[char](foop[1])
    source.add cast[char](foop[0])
 
+proc set_u16be*(source: var string; v: uint16; at: int) =
+   var foop = cast[array[4, byte]](v)
+   source[at+0] = cast[char](foop[1])
+   source[at+1] = cast[char](foop[0])
+
+proc set_u32be*(source: var string; v: uint32; at: int) =
+   var foop = cast[array[4, byte]](v)
+   source[at+0] = cast[char](foop[3])
+   source[at+1] = cast[char](foop[2])
+   source[at+2] = cast[char](foop[1])
+   source[at+3] = cast[char](foop[0])
+
+proc write_theader*(source: var string; value: THeaderHeader; ok: var bool) =
+   ok = false
+
+   # TODO endian nonsense; we assume host is little and we're posting to network byte order
+   let full_length_pos = source.len
+   pad(source, 4)
+   let start_size_check_pos = source.len
+
+   put_u16be(source, HeaderMagic) # add header magic
+   put_u16be(source, value.flags) # add flags
+   put_u32be(source, value.sequence_number) # add sequence number
+
    # add remainin header bytes / 4
    let header_remainder_pos = source.len
-   source.add 0.char
-   source.add 0.char
+   pad(source, 2)
    let header_remainder_tracking_pos = source.len
 
    # add protocol ID
@@ -159,6 +169,7 @@ proc write_theader*(source: var string; value: THeaderHeader; ok: var bool) =
 
    # add transform count and transforms
    write_varint(source, value.transforms.len, ok)
+   if not ok: return
    for v in value.transforms:
       write_varint(source, v, ok)
       if not ok: return
@@ -188,19 +199,13 @@ proc write_theader*(source: var string; value: THeaderHeader; ok: var bool) =
    let end_headers_pos_b = source.len
 
    let payload_size = (end_headers_pos_b - start_size_check_pos).uint32 + value.length
-   foop = cast[array[4, byte]](payload_size)
-   source[full_length_pos+0] = cast[char](foop[3])
-   source[full_length_pos+1] = cast[char](foop[2])
-   source[full_length_pos+2] = cast[char](foop[1])
-   source[full_length_pos+3] = cast[char](foop[0])
+   set_u32be(source, payload_size, full_length_pos)
 
    let sanity = (end_headers_pos_b - header_remainder_tracking_pos) mod 4
    assert sanity == 0
 
    let header_size = (end_headers_pos_b - header_remainder_tracking_pos) div 4
-   doop = cast[array[2, byte]](header_size)
-   source[header_remainder_pos+0] = cast[char](doop[1])
-   source[header_remainder_pos+1] = cast[char](doop[0])
+   set_u16be(source, header_size.uint16, header_remainder_pos)
 
    ok = true
 
