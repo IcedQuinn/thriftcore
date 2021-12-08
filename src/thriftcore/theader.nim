@@ -28,6 +28,28 @@ macro rnok(x: untyped): untyped =
       `x`
       if not ok: return
 
+proc read_u16be*(source: string; here: var int; ok: var bool): uint16 =
+   ok = false
+   let valid = 0..source.high
+   var candy: array[2, byte]
+   if here+3 notin valid: return
+   for i in 0..1:
+      candy[1-i] = cast[byte](source[here])
+      inc here
+   result = cast[uint16](candy)
+   ok = true
+
+proc read_u32be*(source: string; here: var int; ok: var bool): uint32 =
+   ok = false
+   let valid = 0..source.high
+   var candy: array[4, byte]
+   if here+3 notin valid: return
+   for i in 0..3:
+      candy[3-i] = cast[byte](source[here])
+      inc here
+   result = cast[uint32](candy)
+   ok = true
+
 proc read_theader*(source: string; here: var int; ok: var bool): THeaderHeader =
    let valid = 0..source.high
    ok = false
@@ -36,42 +58,15 @@ proc read_theader*(source: string; here: var int; ok: var bool): THeaderHeader =
       if not ok:
          here = mark
 
-   var lengthbyte: array[4, byte]
-   if here+3 notin valid: return
-   for i in 0..3:
-      lengthbyte[3-i] = cast[byte](source[here])
-      inc here
-   result.length = cast[uint32](lengthbyte)
+   var magic, headersize: uint16
+
+   rnok: result.length = read_u32be(source, here, ok)
    let length_tracking_starts = here
-
-   var magicbyte: array[2, byte]
-   if here+1 notin valid: return
-   for i in 0..1:
-      magicbyte[1-i] = cast[byte](source[here])
-      inc here
-
-   var flagsbyte: array[2, byte]
-   if here+1 notin valid: return
-   for i in 0..1:
-      flagsbyte[1-i] = cast[byte](source[here])
-      inc here
-   result.flags = cast[uint16](flagsbyte)
-
-   var sequencebyte: array[4, byte]
-   if here+3 notin valid: return
-   for i in 0..3:
-      sequencebyte[3-i] = cast[byte](source[here])
-      inc here
-   result.sequence_number = cast[uint32](sequencebyte)
-
-   var headersizebyte: array[2, byte]
-   if here+1 notin valid: return
-   for i in 0..1:
-      headersizebyte[1-i] = cast[byte](source[here])
-      inc here
-   let headersize = cast[uint16](headersizebyte)
+   rnok: magic = read_u16be(source, here, ok)
+   rnok: result.flags = read_u16be(source, here, ok)
+   rnok: result.sequence_number = read_u32be(source, here, ok)
+   rnok: headersize = read_u16be(source, here, ok)
    let header_size_begins = here
-
    rnok: result.protocol_id = read_varint(source, here, ok).int
 
    let transform_count = read_varint(source, here, ok).int
