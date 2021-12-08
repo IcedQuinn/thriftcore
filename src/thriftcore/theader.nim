@@ -1,4 +1,4 @@
-import varint
+import macros, varint
 
 const
    ZlibTransform*   = 0x01
@@ -20,6 +20,13 @@ type
       protocol_id*: int
       key_values*: seq[(string, string)]
       transforms: seq[int] ## Technically transforms can accept data blocks but no supported transform does. Keep this variable access controlled for future upgrades.
+
+macro rnok(x: untyped): untyped =
+   ## Call X then test if 'ok' is true otherwise return.
+   ## Common idiom when testing if parsers were successful.
+   result = quote:
+      `x`
+      if not ok: return
 
 proc read_theader*(source: string; here: var int; ok: var bool): THeaderHeader =
    let valid = 0..source.high
@@ -65,8 +72,7 @@ proc read_theader*(source: string; here: var int; ok: var bool): THeaderHeader =
    let headersize = cast[uint16](headersizebyte)
    let header_size_begins = here
 
-   result.protocol_id = read_varint(source, here, ok).int
-   if not ok: return
+   rnok: result.protocol_id = read_varint(source, here, ok).int
 
    let transform_count = read_varint(source, here, ok).int
    if not ok: return
@@ -84,7 +90,7 @@ proc read_theader*(source: string; here: var int; ok: var bool): THeaderHeader =
    let needle = header_size_begins + (headersize.int * 4)
    while here < needle:
       let info_id = read_varint(source, here, ok)
-      if not ok: break
+      if not ok: return
       case info_id:
       of InfoKeyValue:
          let count = read_varint(source, here, ok)
@@ -164,28 +170,21 @@ proc write_theader*(source: var string; value: THeaderHeader; ok: var bool) =
    let header_remainder_tracking_pos = source.len
 
    # add protocol ID
-   write_varint(source, value.protocol_id, ok)
-   if not ok: return
+   rnok: write_varint(source, value.protocol_id, ok)
 
    # add transform count and transforms
-   write_varint(source, value.transforms.len, ok)
-   if not ok: return
+   rnok: write_varint(source, value.transforms.len, ok)
    for v in value.transforms:
-      write_varint(source, v, ok)
-      if not ok: return
+      rnok: write_varint(source, v, ok)
 
    # write INFO segment and its key/value pairs
-   write_varint(source, InfoKeyValue, ok)
-   if not ok: return
-   write_varint(source, value.keyvalues.len, ok)
-   if not ok: return
+   rnok: write_varint(source, InfoKeyValue, ok)
+   rnok: write_varint(source, value.keyvalues.len, ok)
    for kv in value.keyvalues:
-      write_varint(source, kv[0].len, ok)
-      if not ok: return
+      rnok: write_varint(source, kv[0].len, ok)
       source.add kv[0]
 
-      write_varint(source, kv[1].len, ok)
-      if not ok: return
+      rnok: write_varint(source, kv[1].len, ok)
       source.add kv[1]
 
    let end_headers_pos_a = source.len
