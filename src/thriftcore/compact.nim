@@ -1,4 +1,4 @@
-import varint
+import protocol, compactimpl, varints
 
 type
    CompactElementType* = enum
@@ -50,295 +50,449 @@ type
          key_type*, value_type*: CompactElementType
 
 proc to_byte*(cet: CompactElementType): byte =
-   case cet:
-   of cetBoolTrue: return 1
-   of cetBoolFalse: return 2
-   of cetI8: return 3
-   of cetI16: return 4
-   of cetI32: return 5
-   of cetI64: return 6
-   of cetDouble: return 7
-   of cetBinary: return 8
-   of cetList: return 9
-   of cetSet: return 10
-   of cetMap: return 11
-   of cetStruct: return 12
-   of cetUnknown: return 0 # XXX maybe throw a defect?
-
 proc to_cet*(b: byte): CompactElementType =
-   case b
-   of 1: return cetBoolTrue
-   of 2: return cetBoolFalse
-   of 3: return cetI8
-   of 4: return cetI16
-   of 5: return cetI32
-   of 6: return cetI64
-   of 7: return cetDouble
-   of 8: return cetBinary
-   of 9: return cetList
-   of 10: return cetSet
-   of 11: return cetMap
-   of 12: return cetStruct
-   else:
-      return cetUnknown
-
 proc to_byte*(cmt: CompactMessageType): byte =
-   case cmt
-   of cmtCall: return 1
-   of cmtReply: return 2
-   of cmtException: return 3
-   of cmtOneway: return 4
-   of cmtUnknown: return 0 # XXX maybe throw a defect?
-
 proc to_cmt*(cmt: int): CompactMessageType =
-   case cmt
-   of 1: return cmtCall
-   of 2: return cmtReply
-   of 3: return cmtException
-   of 4: return cmtOneway
-   else:
-      # XXX maybe throw a defect?
-      return cmtUnknown
-
 proc field_fits_nibble*(value: int): bool =
-   return value >= 0 and value < 0x0F
-
 proc read_struct_field_header*(source: string; last_field: var int16; here: var int; ok: var bool): CompactEvent =
-   ## last_field is used to resolve field offset deltas.
-   ok = false
-   let mark = here
-   let loof = last_field
-   let valid = 0..source.high
-   result = CompactEvent(kind: cetStruct)
-   defer:
-      if not ok:
-         here = mark
-         last_field = loof
-
-   if here notin valid: return
-   let h = source[here].uint8
-   inc here
-   if here notin valid: return
-
-   let hlo = h and 0x0F
-   let hhi = (h and 0xF0) shr 4
-
-   result.inner_list_type = to_cet(hlo)
-
-   if hhi > 0:
-      # this is a delta
-      inc last_field, hhi.int
-   else:
-      last_field = read_zigvarint(source, here, ok).int16
-      if not ok: return
-
-   result.field = last_field
-   ok = true
-
 proc read_list_header*(source: string; here: var int; ok: var bool): CompactEvent =
-   ## Reads a list heading.
-   let mark = here
-   let valid = 0..source.high
-   ok = false
-   if here notin valid: return
-   defer:
-      if not ok:
-         here = mark
-
-   let h = source[here].uint8
-   inc here
-   if here notin valid: return
-
-   let hlo = h and 0x0F
-   let hhi = (h and 0xF0) shr 4
-
-   result = CompactEvent(kind: cetList)
-   result.inner_list_type = to_cet(hlo)
-   # NB bool lists are typed as cetBoolFalse in this header
-   # their values are single bytes 0 or 1
-
-   if hhi < 0x0F:
-      result.list_length = hhi.int32
-   else:
-      result.list_length = read_zigvarint(source, here, ok).int16
-      if not ok: return
-
-   ok = true
-
 proc read_set_header*(source: string; here: var int; ok: var bool): CompactEvent =
-   ## Reads a list heading and if successful, marks it as a set instead.
-   result = read_list_header(source, here, ok)
-   if ok:
-      result.kind = cetSet
-
 proc read_map_header*(source: string; here: var int; ok: var bool): CompactEvent =
-   ## Reads a map header.
-   let valid = 0..source.high
-   let mark = here
-   ok = false
-   if here notin valid: return
-   defer:
-      if not ok:
-         here = mark
-
-   result = CompactEvent(kind: cetMap)
-
-   result.map_elements = read_zigvarint(source, here, ok).int32
-   if not ok: return
-   if here notin valid: return
-
-   let h = source[here].uint8
-   inc here
-
-   let hlo = h and 0x0F
-   let hhi = (h and 0xF0) shr 4
-
-   result.key_type = to_cet(hhi)
-   result.value_type = to_cet(hlo)
-
-   ok = true
-
 proc read_message_header*(source: string; here: var int; ok: var bool): CompactMessageHeader =
-   let valid = 0..source.high
-   let mark = here
-   ok = false
-   if here notin valid: return
-   defer:
-      if not ok:
-         here = mark
-
-   result.protocol_id = source[here].int
-   inc here
-   if here notin valid: return
-
-   let h = source[here].uint8
-   inc here
-   if here notin valid: return
-
-   let hlo = h and 0x37
-   let hhi = (h and 0xE0) shr 5
-
-   result.message_type = to_cmt(hhi.int)
-   result.version = hlo.int
-
-   result.sequence_id = read_zigvarint(source, here, ok).int32
-   if here notin valid: return
-
-   let namelen = read_zigvarint(source, here, ok)
-   if here notin valid: return
-
-   let needle = here + namelen
-   if needle notin valid: return
-   result.name = source.substr(here.int, needle.int)
-   inc here, namelen.int
-
-   ok = true
-
 proc write_binary*(source: var string; payload: string; ok: var bool) =
-   write_varint(source, payload.len.int64, ok)
-   source.add payload
-   ok = true
-
-# NB compact protocol uses little endian because someone goofed back in the day
-
 proc read_double*(source: string; here: var int; ok: var bool): float64 =
-   let valid = 0..source.high
-   ok = false
-   if here notin valid: return
-   if here+7 notin valid: return
-
-   var buffer: array[8, byte]
-   for i in 0..7:
-      buffer[i] = source[here].byte
-      inc here
-
-   result = cast[float64](buffer)
-
 proc write_double*(source: var string; payload: float64; ok: var bool) =
-   var buffer = cast[array[8, byte]](payload)
-   for i in 0..7: cast[char](source.add buffer[i])
-   ok = true
-
 proc write_listset_bool*(source: var string; payload: bool; ok: var bool) =
-   if payload:
-      source.add cast[char](1)
-   else:
-      source.add cast[char](0)
-   ok = true
-
 proc write_close_byte*(source: var string; ok: var bool) =
-   ## Writes a nil byte. Needed to write empty maps, or close structures.
-   source.add 0.char
-   ok = true
-
 proc write_struct_header*(source: var string; field_type: CompactElementType; field_id: int16; last_id: var int16; ok: var bool) =
-   ## Writes the header for a struct entry.
-   ## last_field is used to support differential encoding of field IDs.
-
-   let gap = last_id.int - field_id.int
-
-   if field_fits_nibble(gap):
-      source.add cast[char]((gap.byte shl 4) + to_byte(field_type))
-   else:
-      let size = cast[array[2, byte]](field_id)
-      source.add cast[char](to_byte(field_type))
-      source.add cast[char](size[0])
-      source.add cast[char](size[1])
-
-   last_id = field_id
-   ok = true
-
 proc write_listset_header*(source: var string; value_type: CompactElementType; count: int; ok: var bool) =
-   if count < 0:
-      ok = false
-      return
-
-   if count < 15:
-      source.add cast[char]((count.byte shr 4) + to_byte(value_type))
-      write_varint(source, count, ok)
-      if not ok: return
-   else:
-      source.add cast[char](0xF0 + to_byte(value_type))
-
-   ok = true
-
 proc write_map_header*(source: var string; key_type, value_type: CompactElementType; count: int; ok: var bool) =
-   if count < 0:
-      ok = false
-      return
 
-   if count == 0:
-      source.add 0.char
-   else:
-      write_varint(source, count, ok)
-      if not ok: return
+#---
 
-   source.add cast[char]((to_byte(key_type) shl 4) + to_byte(value_type))
+type
+   CompactProtocol* = object of Protocol
+      last_id*: seq[int]
+      list_or_set*: seq[bool]
+      buffer*: string
+      here*: int # Cursor used when reading the buffer.
 
-   ok = true
+type
+   TypeKind* = enum
+      tkI16
+      tkI32
+      tkI64
+      tkStruct
+      tkMap
+      tkList
+      tkSet
+      tkBool
+      tkByte
+      tkDouble
+      tkString
 
-when is_main_module:
-   block:
-      let a = b128enc(1)
-      assert a[0] == 1
-      assert b128dec(a) == 1
+   Protocol* = object of RootObj
 
-      let b = b128enc(300)
-      assert b[0] == 172
-      assert b[1] == 2
-      assert b128dec(b) == 300
+const
+   ENotImplemented = "Method not implemented."
 
-      let c = b128enc(50399)
-      assert c[0] == 0xDF
-      assert c[1] == 0x89
-      assert c[2] == 0x03
-      assert b128dec(c) == 50399
+converter to_cet(kind: TypeKind): CompactElementType =
+   case kind
+   of tkI16: return cetI16
+   of tkI32: return cetI32
+   of tkI64: return cetI64
+   of tkStruct: return cetStruct
+   of tkMap: return cetMap
+   of tkList: return cetList
+   of tkSet: return cetSet
+   of tkBool: return cetBoolFalse
+   of tkByte: return cetI8
+   of tkDouble: return cetDouble
+   of tkString: return cetString
 
-      assert zigzag32( 0) == 0
-      assert zigzag32(-1) == 1
-      assert zigzag32( 1) == 2
-      assert zigzag32(-2) == 3
+converter to_typekind(kind: TypeKind): CompactElementType =
+   case kind
+   of cetI16: return tkI16
+   of cetI32: return tkI32
+   of cetI64: return tkI64
+   of cetStruct: return tkStruct
+   of cetMap: return tkMap
+   of cetList: return tkList
+   of cetSet: return tkSet
+   of cetBoolTrue, cetBoolFalse: return tkBool
+   of cetI8: return tkByte
+   of cetDouble: return tkDouble
+   of cetString: return tkString
 
-      assert unzigzag32(zigzag32(1337)) == 1337
-      assert unzigzag32(zigzag32(-1337)) == -1337
+#/-
+#| Write messages
+#\-
+
+method write_message_begin*(
+   self: ref CompactProtocol;
+   name: string;
+   kind: MessageKind;
+   sequence_number: uint32) =
+      # TODO refactor this to a write_message_header call in compactimpl
+      var ok: bool
+      # TODO better exception
+      if name.len == 0: raise new_exception(Exception, "Message name may not be empty.")
+
+      self.buffer.add cast[char](0x82)
+
+      var mt: int
+      case kind
+      of mkCall: mt = 1
+      of mkReply: mt = 2
+      of mkException: mt = 3
+      of mkOneway: mt = 4
+      mt = (mt shl 4) + 1
+
+      self.buffer.add cast[char](mt)
+      put_u32be(self.buffer, sequence_number)
+      write_varint(self,buffer, name.len, ok)
+      source.add name
+
+method write_message_end*(
+   self: ref CompactProtocol) =
+      discard # no message trailer
+
+method write_struct_begin*(
+   self: ref CompactProtocol;
+   name: string) =
+      self.last_id.add 0
+      self.list_or_set.add false
+
+method write_struct_end*(
+   self: ref CompactProtocol) =
+      if self.last_id.len == 0:
+         # TODO exception
+         raise new_exception("Stack underflow.")
+      if self.list_or_set.len == 0:
+         # TODO exception
+         raise new_exception("Stack underflow.")
+      write_close_byte(self.buffer) # end with a single null
+      self.last_id.pop
+      self.list_or_set.pop
+
+method write_field_begin*(
+   self: ref CompactProtocol;
+   name: string;
+   kind: TypeKind;
+   id: int) =
+      var lid = self.last_field[self.last_field.high]
+      write_struct_header(self.buffer, kind, lid, id)
+      self.last_field[self.last_field.high] = lid
+
+method write_field_end*(
+   self: ref CompactProtocol) =
+      discard # end of field has no marker
+
+method write_field_stop*(
+   self: ref CompactProtocol) =
+      write_close_byte(self.buffer)
+
+method write_map_begin*(
+   self: ref CompactProtocol;
+   key_kind, value_kind: TypeKind;
+   size: int) =
+      write_map_header(self.buffer, key_kind, value_kind, size)
+      self.list_or_set.add true
+
+method write_map_end*(
+   self: ref CompactProtocol) =
+      if self.list_or_set.len == 0:
+         # TODO exception
+         raise new_exception("Stack underflow.")
+      self.list_or_set.pop
+      discard # nothing to encode
+
+method write_list_begin*(
+   self: ref CompactProtocol;
+   name: string;
+   value_kind: TypeKind;
+   size: int) =
+      self.list_or_set.add true
+      write_listset_header(self.buffer, element_kind, size)
+
+method write_list_end*(
+   self: ref CompactProtocol) =
+      if self.list_or_set.len == 0:
+         # TODO exception
+         raise new_exception("Stack underflow.")
+      self.list_or_set.pop
+      discard # nothing to encode
+
+method write_set_begin*(
+   self: ref CompactProtocol;
+   element_kind: TypeKind;
+   size: int) =
+      self.list_or_set.add true
+      write_listset_header(self.buffer, element_kind, size)
+
+method write_set_end*(
+   self: ref CompactProtocol) =
+      if self.list_or_set.len == 0:
+         # TODO exception
+         raise new_exception("Stack underflow.")
+      self.list_or_set.pop
+      discard # nothing to encode
+
+method write_bool*(
+   self: ref CompactProtocol;
+   value: bool) =
+      # bools are encoded either as a byte (in lists, sets and maps) or
+      # as a different type code if a struct field
+      if self.list_or_set[self.list_or_set.high]:
+         # encode as a 0 or a 1
+         write_listset_bool(self.buffer, value)
+      else:
+         if value:
+            # tricky; have to decrement the type code by one
+            let x = self.buffer[self.buffer.high]
+            let y = cast[char](cast[byte](x) - 1)
+            self.buffer[self.buffer.high] = y
+         else:
+            discard # encoded as false by default so we're done
+
+method write_byte*(
+   self: ref CompactProtocol;
+   value: byte) =
+      var ok: bool
+      write_varint(self.buffer, value, ok)
+
+method write_i16*(
+   self: ref CompactProtocol;
+   value: int16) =
+      var ok: bool
+      write_varint(self.buffer, value, ok)
+
+method write_i32*(
+   self: ref CompactProtocol;
+   value: int32) =
+      var ok: bool
+      write_varint(self.buffer, value, ok)
+
+method write_i64*(
+   self: ref CompactProtocol;
+   value: int64) =
+      var ok: bool
+      write_varint(self.buffer, value, ok)
+
+method write_double*(
+   self: ref CompactProtocol;
+   value: float64) =
+      # TODO this is meant to always be little endian
+      # ... because of historical goofs by someone
+      let mem = cast[array[8, byte])(value)
+      for i in 0..7: self.buffer.add cast[char](mem[i])
+
+method write_string*(
+   self: ref CompactProtocol;
+   value: string) =
+      var ok: bool
+      write_varint(self.buffer, value.len)
+      self.buffer.add value
+
+#/-
+#| Read messages
+#\-
+
+method read_message_begin*(
+   self: ref CompactProtocol;
+   name: var string;
+   kind: var TypeKind;
+   sequence_number: var uint32) =
+      var ok: bool
+      var x = read_message_header(self.buffer, self.here, ok)
+      if not ok:
+         # TODO exception
+         raise new_exception(Exception, "Parsing failed.")
+      # TODO check protocol ID
+      name = x.name
+      kind = x.message_type
+      sequence_number = x.sequence_id
+
+method read_message_end*(
+   self: ref CompactProtocol) =
+      discard
+
+method read_struct_begin*(
+   self: ref CompactProtocol;
+   name: var string) =
+      self.last_id.add 0
+      self.list_or_set.add false
+      name = ""
+
+method read_struct_end*(
+   self: ref CompactProtocol) =
+      if self.last_id.len == 0:
+         # TODO exception
+         raise new_exception("Stack underflow.")
+      if self.list_or_set.len == 0:
+         # TODO exception
+         raise new_exception("Stack underflow.")
+      self.last_id.pop
+      self.list_or_set.pop
+
+method read_field_begin*(
+   self: ref CompactProtocol;
+   name: var string;
+   kind: var TypeKind;
+   id: var int) =
+      var ok: bool
+      var lid = self.last_field[self.last_field.high]
+      var x = read_struct_field_header(self.buffer, lid, self.here, ok)
+      self.last_field[self.last_field.high] = lid
+      if not ok:
+         # TODO exception
+         raise new_exception(Exception, "Parsing failed.")
+      id = x.field
+      kind = x.kind
+      name = ""
+
+method read_field_end*(
+   self: ref CompactProtocol) =
+      discard
+
+method read_map_begin*(
+   self: ref CompactProtocol;
+   key_kind, value_kind: var TypeKind;
+   size: var int) =
+      var ok: bool
+      self.list_or_set.add true
+      var x = read_map_header(self.buffer, self.here, ok)
+      if not ok:
+         # TODO exception
+         raise new_exception(Exception, "Parsing failed.")
+      key_kind = x.key_type
+      value_kind = x.value_type
+      size = x.map_elements
+
+method read_map_end*(
+   self: ref CompactProtocol) =
+      if self.list_or_set.len == 0:
+         # TODO exception
+         raise new_exception("Stack underflow.")
+      self.list_or_set.pop
+
+method read_list_begin*(
+   self: ref CompactProtocol;
+   value_kind: var TypeKind;
+   size: var int) =
+      self.list_or_set.add true
+      var ok: bool
+      var x = read_list_header(self.buffer, selfhere, ok)
+      if not ok:
+         # TODO exception
+         raise new_exception(Exception, "Parsing failed.")
+         # TODO
+
+method read_list_end*(
+   self: ref CompactProtocol) =
+      if self.list_or_set.len == 0:
+         # TODO exception
+         raise new_exception("Stack underflow.")
+      self.list_or_set.pop
+
+method read_set_begin*(
+   self: ref CompactProtocol;
+   element_kind: var TypeKind;
+   size: var int) =
+      self.list_or_set.add true
+      var ok: bool
+      var x = read_list_header(self.buffer, selfhere, ok)
+      if not ok:
+         # TODO exception
+         raise new_exception(Exception, "Parsing failed.")
+         # TODO
+
+method read_set_end*(
+   self: ref CompactProtocol) =
+      if self.list_or_set.len == 0:
+         # TODO exception
+         raise new_exception("Stack underflow.")
+      self.list_or_set.pop
+
+method read_bool*(
+   self: ref CompactProtocol;
+   value: var bool) =
+      if self.list_or_set[self.list_or_set.high]:
+         # in a list, set, or map, so read one byte
+         if self.here+1 in 0..self.buffer.high:
+            value = (self[here] != 0)
+            inc self.here
+         else:
+            # TODO
+            raise new_exception(Exception, "Parsing failed.")
+      else:
+         # struct field; so read the type off the struct byte
+         value = (self.buffer[self.here-1] and 0x0F) == 0x1
+
+method read_byte*(
+   self: ref CompactProtocol;
+   value: var byte) =
+      var ok: bool
+      var x = read_varint(self.buffer, self.here, ok)
+      if not ok:
+         # TODO exception
+         raise new_exception(Exception, "Parsing failed.")
+      value = x.byte
+
+method read_i16*(
+   self: ref CompactProtocol;
+   value: var int16) =
+      var ok: bool
+      var x = read_varint(self.buffer, self.here, ok)
+      if not ok:
+         # TODO exception
+         raise new_exception(Exception, "Parsing failed.")
+      value = x.int16
+
+method read_i32*(
+   self: ref CompactProtocol;
+   value: var int32) =
+      var ok: bool
+      var x = read_varint(self.buffer, self.here, ok)
+      if not ok:
+         # TODO exception
+         raise new_exception(Exception, "Parsing failed.")
+      value = x.int32
+
+method read_i64*(
+   self: ref CompactProtocol;
+   value: var int64) =
+      var ok: bool
+      var x = read_varint(self.buffer, self.here, ok)
+      if not ok:
+         # TODO exception
+         raise new_exception(Exception, "Parsing failed.")
+      value = x.int64
+
+method read_double*(
+   self: ref CompactProtocol;
+   value: var float64) =
+      # TODO this is meant to always be little endian
+      # ... because of historical goofs by someone
+      let mem = cast[array[8, byte])(value)
+      if self.here+7 notin 0..self.buffer.high:
+         # TODO exception
+         raise new_exception(Exception, "Parsing failed.")
+      for i in 0..7:
+         mem[i] = self.buffer[self.here]
+         inc self.here
+      value = cast[float64](mem)
+
+method read_string*(
+   self: ref CompactProtocol;
+   value: var string) =
+      var ok: bool
+      var strlen = read_varint(self.buffer, self.here, ok)
+      if not ok:
+         # TODO exception
+         raise new_exception(Exception, "Parsing failed.")
+      if strlen > 0:
+         value = self.buffer.substr(self.here, self.here+(strlen-1))
+      else:
+         value = ""
 
