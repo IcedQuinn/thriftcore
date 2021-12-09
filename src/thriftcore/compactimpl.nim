@@ -30,7 +30,7 @@ type
       name*: string
 
    CompactEvent* = object
-      case kind: CompactElementType
+      case kind*: CompactElementType
       of cetUnknown, cetBoolTrue, cetBoolFalse:
          discard
       of cetI8, cetI16, cetI32, cetI64:
@@ -221,7 +221,7 @@ proc read_message_header*(source: string; here: var int; ok: var bool): CompactM
    result.message_type = to_cmt(hhi.int)
    result.version = hlo.int
 
-   result.sequence_id = read_zigvarint(source, here, ok).int32
+   result.sequence_id = read_varint(source, here, ok).int32
    if here notin valid: return
 
    let namelen = read_zigvarint(source, here, ok)
@@ -256,7 +256,7 @@ proc read_double*(source: string; here: var int; ok: var bool): float64 =
 
 proc write_double*(source: var string; payload: float64; ok: var bool) =
    var buffer = cast[array[8, byte]](payload)
-   for i in 0..7: cast[char](source.add buffer[i])
+   for i in 0..7: source.add cast[char](buffer[i])
    ok = true
 
 proc write_listset_bool*(source: var string; payload: bool; ok: var bool) =
