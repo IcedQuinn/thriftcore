@@ -1,7 +1,7 @@
 import protocol, compactimpl, varint, codecutil
 
 type
-   CompactProtocol* = ref object of RootObj
+   CompactProtocol* = ref object of Protocol
       last_field*: seq[int16]
       list_or_set*: seq[bool]
       buffer*: string
@@ -139,7 +139,6 @@ method write_map_end*(
 
 method write_list_begin*(
    self: CompactProtocol;
-   name: string;
    value_kind: TypeKind;
    size: int) =
       var ok: bool
