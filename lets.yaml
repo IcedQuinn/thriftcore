@@ -1,6 +1,9 @@
 shell: fish
 
 commands:
+   test:
+      cmd: please test
+
    push:
       cmd: git push github
 
