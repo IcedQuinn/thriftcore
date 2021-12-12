@@ -1,0 +1,6 @@
+shell: fish
+
+commands:
+   push:
+      cmd: git push github
+
