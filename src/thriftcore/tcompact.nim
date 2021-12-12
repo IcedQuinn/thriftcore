@@ -1,4 +1,4 @@
-import protocol, compactimpl, varint, codecutil
+import protocol, tcompactimpl, varint, codecutil
 
 type
    CompactProtocol* = ref object of Protocol
